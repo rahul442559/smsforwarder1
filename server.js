@@ -10,40 +10,73 @@ const io = new Server(server); // Attach Socket.IO to the server
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
-let latestMessage = 'No messages received yet.'; // Store the latest message
+// ===== State for "latest SMS" with 3-minute TTL =====
+let latest = null;           // { message, timestamp, expiresAt }
+let autoClearTimer = null;   // Node timeout handle
 
 // Endpoint to receive SMS data
 app.post('/sms', (req, res) => {
-    const message = req.body.key || 'No message received'; // Extract message from "key"
-    const timestamp = req.body.time || 'Unknown time'; // Extract timestamp
+  const message = req.body.key || 'No message received'; // Extract message from "key"
+  const timestamp = req.body.time || new Date().toISOString(); // If not provided, use now
 
-    latestMessage = `Received at: ${timestamp}\nMessage: ${message}`;
-    console.log('Processed SMS:', latestMessage);
+  // Cancel any existing auto-clear
+  if (autoClearTimer) clearTimeout(autoClearTimer);
 
-    // Broadcast the message to all connected clients
-    io.emit('newMessage', { timestamp, message });
+  // Persist for 3 minutes from now
+  const ttlMs = 3 * 60 * 1000;
+  const expiresAt = Date.now() + ttlMs;
+  latest = { message, timestamp, expiresAt };
 
-    res.status(200).json({ success: true, message: 'SMS received successfully' });
+  console.log('Processed SMS:', { message, timestamp, expiresAt: new Date(expiresAt).toISOString() });
+
+  // Broadcast the message (with expiry time) to all connected clients
+  io.emit('newMessage', latest);
+
+  // Auto-remove after TTL
+  autoClearTimer = setTimeout(() => {
+    latest = null;
+    io.emit('messageDeleted', { reason: 'expired' });
+    console.log('Latest SMS auto-removed after 3 minutes.');
+  }, ttlMs);
+
+  res.status(200).json({ success: true, message: 'SMS received successfully', expiresAt });
+});
+
+// Allow manual deletion of the latest SMS
+app.delete('/sms', (req, res) => {
+  if (!latest) {
+    return res.status(200).json({ success: true, message: 'No SMS to delete' });
+  }
+  if (autoClearTimer) clearTimeout(autoClearTimer);
+  latest = null;
+  io.emit('messageDeleted', { reason: 'deleted' });
+  console.log('Latest SMS deleted by user.');
+  res.status(200).json({ success: true, message: 'SMS deleted' });
 });
 
 // Serve a simple HTML page for real-time message display
 app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
+  res.sendFile(__dirname + '/index.html');
 });
 
 // Socket.IO connection event
 io.on('connection', (socket) => {
-    console.log('A user connected');
-    // Send the latest message to the newly connected client
-    socket.emit('newMessage', { message: latestMessage });
+  console.log('A user connected');
 
-    socket.on('disconnect', () => {
-        console.log('A user disconnected');
-    });
+  // Send either the current message or "no message" signal
+  if (latest) {
+    socket.emit('newMessage', latest);
+  } else {
+    socket.emit('messageDeleted', { reason: 'none' });
+  }
+
+  socket.on('disconnect', () => {
+    console.log('A user disconnected');
+  });
 });
 
 // Start the server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Server is running on http://localhost:${PORT}`);
 });
