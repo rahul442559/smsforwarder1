@@ -1,15 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Real-Time SMS Display</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 16px; }
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; padding: 16px; }
     #card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; max-width: 680px; }
     #row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     #messages { white-space: pre-line; }
     #deleteBtn { display: none; padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; cursor: pointer; }
+    small { color: #555; }
   </style>
 </head>
 <body>
@@ -24,6 +25,7 @@
     </div>
   </div>
 
+  <!-- same-origin socket.io client -->
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket = io();
@@ -52,33 +54,34 @@
       countdownTimer = setInterval(tick, 1000);
     }
 
-    // Listen for new messages
+    // নতুন মেসেজ এলেই UI আপডেট + কাউন্টডাউন শুরু
     socket.on('newMessage', (data) => {
-      // data: { message, timestamp, expiresAt }
       messagesDiv.textContent = `Received at: ${data.timestamp}\nMessage: ${data.message}`;
       deleteBtn.style.display = 'inline-block';
       setCountdown(data.expiresAt || null);
     });
 
-    // Listen for deletions / no-message state
+    // মুছে গেলে বা কিছু না থাকলে
     socket.on('messageDeleted', () => {
       messagesDiv.textContent = 'No messages yet...';
       deleteBtn.style.display = 'none';
       setCountdown(null);
     });
 
-    // Delete button -> call DELETE /sms
+    // Delete → আগে DELETE /sms, না হলে POST /sms/delete (fallback)
     deleteBtn.addEventListener('click', async () => {
-      try {
+      async function tryDelete() {
         const res = await fetch('/sms', { method: 'DELETE' });
-        if (res.ok) {
-          // The server will also emit 'messageDeleted', but update UI immediately too
-          messagesDiv.textContent = 'No messages yet...';
-          deleteBtn.style.display = 'none';
-          setCountdown(null);
-        } else {
-          alert('Failed to delete the SMS.');
-        }
+        return res.ok;
+      }
+      async function tryFallback() {
+        const res = await fetch('/sms/delete', { method: 'POST' });
+        return res.ok;
+      }
+      try {
+        let ok = await tryDelete();
+        if (!ok) ok = await tryFallback();
+        if (!ok) alert('Failed to delete the SMS.');
       } catch (e) {
         alert('Network error while deleting.');
       }
